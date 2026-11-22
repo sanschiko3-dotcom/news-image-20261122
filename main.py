@@ -1,86 +1,62 @@
-"""Publish the prepared front-page image as the competition entry.
+"""Entrypoint: verify assets/entry.png and copy it to the output dir.
 
-The grader runs this module with no network and no third-party packages,
-so it uses only the standard library. The picture itself is rendered ahead
-of time by render.py and shipped in this repository as assets/entry.png;
-this module verifies that file, then writes an identical copy to the
-output directory named by MAKEFUN_OUTPUT_DIR (default /output).
-
-Running the module twice writes byte-identical files, because it copies
-fixed bytes and never depends on the clock, randomness, or the network.
+Standard library only. The PNG is checked by its signature bytes, its
+size (<= 1,048,576 bytes) and its IHDR chunk (width/height each <= 1024),
+then copied byte-for-byte to $MAKEFUN_OUTPUT_DIR (default /output) as
+entry.png. The written file is re-read and compared byte-for-byte.
 """
-
 import hashlib
 import os
+import shutil
+import struct
 import sys
-from pathlib import Path
 
-ENTRY_NAME = "entry.png"
-MAX_ENTRY_BYTES = 1_048_576
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+MAX_BYTES = 1048576
+MAX_DIMENSION = 1024
 
 
-def source_path():
-    """Absolute path of the bundled image sitting beside this file."""
-    return Path(__file__).resolve().parent / "assets" / ENTRY_NAME
+def sha256_hex(data):
+    return hashlib.sha256(data).hexdigest()
 
 
-def output_dir():
-    """Output directory from the environment, defaulting to /output."""
-    return Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
-
-
-def checked_bytes(path):
-    """Read the bundled image and reject anything that is not a small PNG."""
-    if not path.is_file():
-        raise FileNotFoundError(
-            "Prepared entry image is missing: {0}".format(path)
-        )
-    data = path.read_bytes()
-    if not data.startswith(PNG_SIGNATURE):
-        raise ValueError(
-            "Prepared entry image is not a PNG file: {0}".format(path)
-        )
-    if len(data) > MAX_ENTRY_BYTES:
-        raise ValueError(
-            "Prepared entry image exceeds 1 MiB: {0} bytes".format(len(data))
-        )
-    if len(data) < 33 or data[12:16] != b"IHDR":
-        raise ValueError(
-            "Prepared entry image has no PNG header chunk: {0}".format(path)
-        )
-    width = int.from_bytes(data[16:20], "big")
-    height = int.from_bytes(data[20:24], "big")
-    if width > 1024 or height > 1024:
-        raise ValueError(
-            "Prepared entry image is {0}x{1}, over the 1024x1024 cap".format(
-                width, height
-            )
-        )
-    return data
-
-
-def publish():
-    """Write the verified image to the output directory and report it.
-
-    The write is re-read and compared byte for byte before the digest is
-    printed, so a truncated or partial write can never pass silently.
-    """
-    data = checked_bytes(source_path())
-    target_dir = output_dir()
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target = target_dir / ENTRY_NAME
-    target.write_bytes(data)
-    written = target.read_bytes()
-    if written != data:
-        raise ValueError("Written entry does not match the source image")
-    digest = hashlib.sha256(data).hexdigest()
-    print("{0} {1} bytes sha256={2}".format(target, len(data), digest))
-    return 0
+def read_ihdr_dimensions(data):
+    """Return (width, height) from the PNG IHDR chunk."""
+    if len(data) < 33:
+        raise ValueError("file too short to be a PNG")
+    if data[:8] != PNG_SIGNATURE:
+        raise ValueError("not a PNG file (bad signature)")
+    length = struct.unpack(">I", data[8:12])[0]
+    chunk_type = data[12:16]
+    if chunk_type != b"IHDR" or length != 13:
+        raise ValueError("first chunk is not a 13-byte IHDR chunk")
+    width, height = struct.unpack(">II", data[16:24])
+    return width, height
 
 
 def main():
-    return publish()
+    here = os.path.dirname(os.path.abspath(__file__))
+    src = os.path.join(here, "assets", "entry.png")
+    out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
+    dst = os.path.join(out_dir, "entry.png")
+    with open(src, "rb") as fh:
+        data = fh.read()
+    if len(data) > MAX_BYTES:
+        raise ValueError(f"entry.png is {len(data)} bytes, over the "
+                         f"{MAX_BYTES}-byte limit")
+    width, height = read_ihdr_dimensions(data)
+    if width > MAX_DIMENSION or height > MAX_DIMENSION:
+        raise ValueError(f"entry.png is {width}x{height}, over the "
+                         f"{MAX_DIMENSION}x{MAX_DIMENSION} limit")
+    os.makedirs(out_dir, exist_ok=True)
+    shutil.copyfile(src, dst)
+    with open(dst, "rb") as fh:
+        written = fh.read()
+    if written != data:
+        raise ValueError("written entry.png differs from the source")
+    print(f"{dst} {width}x{height} {len(written)} bytes "
+          f"sha256={sha256_hex(written)}")
+    return 0
 
 
 if __name__ == "__main__":

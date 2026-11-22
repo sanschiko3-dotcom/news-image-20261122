@@ -1,248 +1,243 @@
-"""Draw the 22 November 2026 world-news front page as a PNG.
+"""Render 'THE WORLD TODAY' — 22 November 2026 newspaper front page.
 
-A single 1024x1024 newspaper front page built with Pillow and written to
-assets/entry.png. Everything is fixed: no randomness, no clock reads, no
-network, fixed fonts and fixed geometry, so repeated runs produce
-byte-identical output.
+Deterministic Pillow drawing: no clock, no randomness, no network.
+Fixed geometry only. Writes assets/entry.png (1024x1024).
 """
-
 import hashlib
 import math
-from pathlib import Path
+import os
 
 from PIL import Image, ImageDraw, ImageFont
 
-HERE = Path(__file__).resolve().parent
-OUT_PATH = HERE / "assets" / "entry.png"
-
 W, H = 1024, 1024
-M = 30
-CW = W - 2 * M
+PAPER = (246, 241, 228)
+INK = (25, 25, 25)
+RED = (164, 18, 32)
+NAVY = (30, 44, 60)
+GOLD = (181, 127, 36)
+GREY = (107, 101, 90)
+DIVIDER = (192, 183, 163)
+PALE = (223, 229, 234)
+ORANGE = (232, 122, 32)
+WHITE = (255, 255, 255)
 
-PAPER = "#f6f1e4"
-INK = "#191919"
-RED = "#a41220"
-NAVY = "#1e2c3c"
-GOLD = "#b57f24"
-GREY = "#6b655a"
-FAINT = "#c0b7a3"
-SKY = "#dfe5ea"
-SAND = "#e9e0cb"
-
-FONT_DIR = "/usr/share/fonts/truetype/dejavu/"
-
-_cache = {}
+FONT_DIR = "/usr/share/fonts/truetype/dejavu"
 
 
-def font(size, serif=False, bold=False):
-    """Load a cached DejaVu face at the requested size."""
-    key = (size, serif, bold)
-    if key not in _cache:
-        stem = "DejaVuSerif" if serif else "DejaVuSans"
-        if bold:
-            stem += "-Bold"
-        try:
-            _cache[key] = ImageFont.truetype(FONT_DIR + stem + ".ttf", size)
-        except OSError:
-            _cache[key] = ImageFont.load_default()
-    return _cache[key]
+def font(name, size):
+    return ImageFont.truetype(os.path.join(FONT_DIR, name), size)
 
 
-def wrap(text, fnt, width):
-    """Break text into lines that fit inside width pixels."""
-    out = []
-    for chunk in text.split("\n"):
-        cur = ""
-        for word in chunk.split():
-            trial = (cur + " " + word).strip()
-            if cur and fnt.getlength(trial) > width:
-                out.append(cur)
-                cur = word
-            else:
-                cur = trial
-        if cur:
-            out.append(cur)
-    return out
+SERIF_B = "DejaVuSerif-Bold.ttf"
+SANS = "DejaVuSans.ttf"
+SANS_B = "DejaVuSans-Bold.ttf"
 
 
-def para(d, x, y, text, size, width, serif=False, bold=False,
-         fill=INK, lead=5):
-    """Draw wrapped text starting at (x, y); return y below the last line."""
-    fnt = font(size, serif, bold)
-    for line in wrap(text, fnt, width):
-        d.text((x, y), line, font=fnt, fill=fill)
-        y += size + lead
+def wrap(draw, text, fnt, max_width):
+    """Wrap text to fit max_width; return list of lines."""
+    lines, cur = [], ""
+    for word in text.split():
+        trial = (cur + " " + word).strip()
+        if draw.textlength(trial, font=fnt) <= max_width:
+            cur = trial
+        else:
+            if cur:
+                lines.append(cur)
+            cur = word
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def draw_wrapped(draw, x, y, text, fnt, max_width, fill, spacing=4):
+    lines = wrap(draw, text, fnt, max_width)
+    for line in lines:
+        draw.text((x, y), line, font=fnt, fill=fill)
+        y += fnt.size + spacing
     return y
 
 
-def rule(d, y, weight=2, colour=RED):
-    d.line((M, y, W - M, y), fill=colour, width=weight)
-
-
-def star(d, cx, cy, outer, inner, points=5, rot=-90, fill=GOLD):
-    """A regular star polygon centred at (cx, cy)."""
+def star_points(cx, cy, outer, inner, points=8, rot=-90):
     pts = []
     for i in range(points * 2):
         r = outer if i % 2 == 0 else inner
         a = math.radians(rot + i * 180.0 / points)
         pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
-    d.polygon(pts, fill=fill)
+    return pts
 
 
-def streak(d, x0, y0, x1, y1, colour):
-    """A missile trail: thin line with a small white dart head."""
-    d.line((x0, y0, x1, y1), fill=colour, width=3)
-    dx, dy = x1 - x0, y1 - y0
-    ln = math.hypot(dx, dy) or 1.0
-    ux, uy, px, py = dx / ln, dy / ln, -dy / ln, dx / ln
-    d.polygon([(x1, y1),
-               (x1 - 15 * ux + 6 * px, y1 - 15 * uy + 6 * py),
-               (x1 - 15 * ux - 6 * px, y1 - 15 * uy - 6 * py)],
-              fill="#f4f1e6")
+def draw_shield(draw, x, y):
+    # Navy shield with a white check, inside a 46x34 box.
+    pts = [(x + 23, y + 2), (x + 44, y + 6), (x + 44, y + 18),
+           (x + 23, y + 32), (x + 2, y + 18), (x + 2, y + 6)]
+    draw.polygon(pts, fill=NAVY)
+    draw.line([(x + 12, y + 17), (x + 20, y + 25), (x + 34, y + 9)],
+              fill=WHITE, width=3)
 
 
-def icon(d, kind, x, y):
-    """Flat pictogram for one grid story, inside a 46x34 box."""
-    if kind == "shield":  # NATO / Kryvyi Rih
-        d.polygon([(x + 23, y + 34), (x + 2, y + 24), (x + 2, y + 8),
-                   (x + 23, y), (x + 44, y + 8), (x + 44, y + 24)],
-                  fill=NAVY)
-        d.line((x + 14, y + 16, x + 20, y + 23, x + 33, y + 9),
-               fill="white", width=3)
-    elif kind == "lock":  # FBI breach
-        d.rectangle((x + 8, y + 14, x + 38, y + 34), fill=RED)
-        d.arc((x + 13, y + 2, x + 33, y + 20), 180, 360, fill=RED, width=4)
-        d.rectangle((x + 21, y + 20, x + 25, y + 28), fill="white")
-    elif kind == "chip":  # Nvidia
-        d.rectangle((x + 10, y + 6, x + 36, y + 30), fill=NAVY)
-        for cx in (16, 23, 30):
-            d.line((x + cx, y, x + cx, y + 6), fill=NAVY, width=2)
-            d.line((x + cx, y + 30, x + cx, y + 36), fill=NAVY, width=2)
-        d.rectangle((x + 18, y + 14, x + 28, y + 22), fill=GOLD)
-    elif kind == "ball":  # ATP final
-        d.ellipse((x + 6, y + 2, x + 40, y + 34), fill=GOLD)
-        d.arc((x + 12, y + 2, x + 30, y + 34), 270, 90, fill=INK, width=2)
-        d.arc((x + 16, y + 2, x + 34, y + 34), 270, 90, fill=INK, width=2)
-    elif kind == "drop":  # Norway oil ruling
-        d.polygon([(x + 23, y), (x + 40, y + 22), (x + 23, y + 34),
-                   (x + 6, y + 22)], fill=NAVY)
-        d.line((x + 8, y + 10, x + 38, y + 30), fill=RED, width=4)
-    elif kind == "bank":  # ECB chief
-        d.polygon([(x, y + 12), (x + 23, y), (x + 46, y + 12)], fill=NAVY)
-        for i in range(3):
-            d.rectangle((x + 5 + i * 15, y + 15, x + 10 + i * 15, y + 29),
-                        fill=NAVY)
-        d.rectangle((x + 2, y + 31, x + 44, y + 35), fill=NAVY)
+def draw_padlock(draw, x, y):
+    # Red padlock, inside a 46x34 box.
+    draw.arc([x + 14, y + 2, x + 32, y + 20], 180, 360, fill=RED, width=4)
+    draw.rounded_rectangle([x + 8, y + 14, x + 38, y + 32], radius=3, fill=RED)
+    draw.ellipse([x + 20, y + 19, x + 26, y + 25], fill=WHITE)
 
 
-def build():
-    """Draw the whole front page and return the Pillow image."""
-    img = Image.new("RGB", (W, H), PAPER)
-    d = ImageDraw.Draw(img)
+def draw_chip(draw, x, y):
+    # Navy chip with a gold centre, inside a 46x34 box.
+    draw.rounded_rectangle([x + 8, y + 4, x + 38, y + 30], radius=4, fill=NAVY)
+    for px in (x + 12, x + 20, x + 28):
+        draw.line([(px, y + 1), (px, y + 4)], fill=NAVY, width=2)
+        draw.line([(px, y + 30), (px, y + 33)], fill=NAVY, width=2)
+    draw.rectangle([x + 17, y + 12, x + 29, y + 22], fill=GOLD)
 
-    # ---- Masthead ------------------------------------------------------
-    para(d, M, 12, "THE WORLD TODAY", 62, CW, serif=True, bold=True, lead=2)
-    para(d, M + 2, 90, "SUNDAY, 22 NOVEMBER 2026", 19, CW, bold=True, lead=2)
-    para(d, M + 2, 118, "Six stories that shaped the day, in one page.",
-         16, CW, fill=GREY, lead=2)
-    rule(d, 146, weight=3)
-    d.line((M, 152, W - M, 152), fill=INK, width=1)
 
-    # ---- Hero: Iran strikes --------------------------------------------
-    hw = 640
-    para(d, M, 168, "MIDDLE EAST ON EDGE", 20, hw, bold=True, fill=RED,
-         lead=2)
-    y = para(d, M, 194, "IRAN STRIKES US DEFENCES AS GULF BRACES",
-             40, hw, serif=True, bold=True, lead=6)
-    y = para(d, M, y + 8,
-             "Revolutionary Guards fire missiles and drones at two US "
-             "Patriot radar sites; Bahrain says an industrial facility "
-             "was hit.",
-             19, hw, lead=6)
-    y = para(d, M, y + 4,
-             "Tehran calls the US blockade a hostile act; the Strait of "
-             "Hormuz could reopen in two days.",
-             18, hw, lead=6)
+def draw_tennis(draw, x, y):
+    # Gold tennis ball, inside a 46x34 box.
+    draw.ellipse([x + 8, y + 2, x + 38, y + 32], fill=GOLD)
+    draw.arc([x + 8, y + 2, x + 38, y + 32], 300, 60, fill=WHITE, width=2)
+    draw.arc([x + 8, y + 2, x + 38, y + 32], 120, 240, fill=WHITE, width=2)
 
-    # Hero picture: night sky over the Gulf, radar dish, incoming fire.
-    x0, y0, x1, y1 = 700, 168, 994, 428
-    d.rectangle((x0, y0, x1, y1), fill=NAVY)
-    for sx, sy in ((724, 190), (770, 214), (836, 186), (912, 208),
-                   (958, 190), (742, 240), (880, 238)):
-        d.ellipse((sx, sy, sx + 3, sy + 3), fill=SKY)
-    # Radar dish and mast, clear of the caption below.
-    d.arc((x0 + 70, y0 + 120, x0 + 150, y0 + 200), 180, 360, fill=SKY,
-          width=4)
-    d.line((x0 + 110, y0 + 160, x0 + 110, y0 + 200), fill=SKY, width=4)
-    d.line((x0 + 90, y0 + 200, x0 + 130, y0 + 200), fill=SKY, width=4)
-    streak(d, x0 + 30, y0 + 40, x0 + 120, y0 + 96, SKY)
-    streak(d, x0 + 70, y0 + 22, x0 + 150, y0 + 72, "#aeb7bc")
-    star(d, x0 + 226, y0 + 128, 46, 20, points=8, fill="#e7a34c")
-    star(d, x0 + 226, y0 + 128, 24, 10, points=8, fill="#f0b45c")
-    d.text((x0 + 16, y1 - 52), "STRAIT OF HORMUZ",
-           font=font(17, bold=True), fill="white")
-    d.text((x0 + 16, y1 - 28), "US Patriot radar sites targeted",
-           font=font(14), fill="#c9d2da")
 
-    rule(d, 448, weight=2)
+def draw_oil_drop(draw, x, y):
+    # Navy oil drop with a red diagonal slash, inside a 46x34 box.
+    pts = [(x + 23, y + 2), (x + 36, y + 18), (x + 36, y + 24),
+           (x + 23, y + 32), (x + 10, y + 24), (x + 10, y + 18)]
+    draw.polygon(pts, fill=NAVY)
+    draw.line([(x + 8, y + 28), (x + 38, y + 4)], fill=RED, width=4)
 
-    # ---- Six-story grid -------------------------------------------------
-    stories = [
-        ("shield", "RUSSIA HITS KRYVYI RIH",
-         "2 killed, 58 injured; NATO vows to defend Poland."),
-        ("lock", "FBI PROBES DATABASE BREACH",
-         "Bureau probes a suspected breach of its national crime "
-         "database."),
-        ("chip", "NVIDIA: NO WAY BACK FOR HUANG",
-         "Board rules out a return for Huang. Revenue $115.8bn, "
-         "up 103%."),
-        ("ball", "ALCARAZ v ZVEREV FOR ATP CROWN",
-         "Alcaraz meets world No. 1 Zverev in the ATP Finals title "
-         "decider."),
-        ("drop", "NORWAY COURT VOIDS OIL LICENCES",
-         "Supreme court rules climate-disputed oil licences invalid."),
-        ("bank", "LAGARDE RESIGNS, ECB HUNT BEGINS",
-         "EU launches search for a new central bank chief."),
-    ]
-    col_w, row_h = 304, 158
-    col_x = [M, M + 328, M + 656]
-    row_y = [466, 624]
-    for i, (kind, head, deck) in enumerate(stories):
-        cx, cy = col_x[i % 3], row_y[i // 3]
-        icon(d, kind, cx, cy + 2)
-        para(d, cx, cy + 44, head, 21, col_w, serif=True, bold=True,
-             lead=4)
-        para(d, cx, cy + 100, deck, 17, col_w, lead=5)
-    for vx in (M + 316, M + 644):
-        d.line((vx, 466, vx, 774), fill=FAINT, width=1)
-    d.line((M, 616, W - M, 616), fill=FAINT, width=1)
 
-    # ---- Also today ------------------------------------------------------
-    rule(d, 790, weight=2)
-    para(d, M, 804, "ALSO TODAY", 17, CW, bold=True, fill=RED, lead=2)
-    also_left = ("Mexico captures cartel boss El Chapo Isidro in Sinaloa  "
-                 "\u2022  Magnitude 6.7 quake in Peru: 152 homes "
-                 "uninhabitable  \u2022  Myanmar hit by a 4.1 quake")
-    also_right = ("Democrats reclaim Congress in US midterm vote  \u2022  "
-                  "EU and Indonesia sign trade deals  \u2022  Al-Shabaab "
-                  "claims ambush on Somali troops")
-    para(d, M, 830, also_left, 17, 470, lead=6)
-    para(d, M + 494, 830, also_right, 17, 470, lead=6)
+def draw_bank(draw, x, y):
+    # Navy bank building: triangle roof, 3 columns, base.
+    draw.polygon([(x + 4, y + 12), (x + 42, y + 12), (x + 23, y + 2)], fill=NAVY)
+    for cx in (x + 10, x + 21, x + 32):
+        draw.rectangle([cx, y + 15, cx + 4, y + 27], fill=NAVY)
+    draw.rectangle([x + 4, y + 29, x + 42, y + 32], fill=NAVY)
 
-    # ---- Footer ----------------------------------------------------------
-    d.line((M, 964, W - M, 964), fill=FAINT, width=1)
-    para(d, M, 976, "Sources: Reuters, AP, ANI, BBC, Al Jazeera  "
-         "\u00b7  22 November 2026", 14, CW, fill=GREY, lead=2)
 
-    return img
+ICONS = [draw_shield, draw_padlock, draw_chip,
+         draw_tennis, draw_oil_drop, draw_bank]
+
+STORIES = [
+    ("RUSSIA HITS KRYVYI RIH",
+     "2 killed, 58 injured; NATO vows to defend Poland."),
+    ("FBI PROBES DATABASE BREACH",
+     "Bureau probes a suspected breach of its national crime database."),
+    ("NVIDIA: NO WAY BACK FOR HUANG",
+     "Board rules out a return for Huang. Revenue $115.8bn, up 103%."),
+    ("ALCARAZ v ZVEREV FOR ATP CROWN",
+     "Alcaraz meets world No. 1 Zverev in the ATP Finals title decider."),
+    ("NORWAY COURT VOIDS OIL LICENCES",
+     "Supreme court rules climate-disputed oil licences invalid."),
+    ("LAGARDE RESIGNS, ECB HUNT BEGINS",
+     "EU launches search for a new central bank chief."),
+]
+def draw_hero_illustration(draw):
+    # Navy box (700,168)-(994,428) with stars, missile trails, radar dish.
+    draw.rectangle([700, 168, 994, 428], fill=NAVY)
+    # Pale stars in the upper half.
+    for sx, sy, r in [(716, 186, 2), (752, 204, 2), (800, 182, 2),
+                      (852, 200, 2), (896, 184, 2), (948, 206, 2),
+                      (972, 182, 2), (828, 224, 2), (920, 228, 2),
+                      (764, 240, 2), (700 + 180, 190, 2)]:
+        draw.ellipse([sx - r, sy - r, sx + r, sy + r], fill=PALE)
+    # Two thin pale missile trails running down-right, each with a dart head.
+    for (x0, y0, x1, y1) in [(828, 196, 912, 268), (806, 238, 888, 306)]:
+        draw.line([(x0, y0), (x1, y1)], fill=PALE, width=2)
+        dx, dy = x1 - x0, y1 - y0
+        ln = math.hypot(dx, dy)
+        ux, uy = dx / ln, dy / ln
+        px, py = -uy, ux
+        tip = (x1 + 10 * ux, y1 + 10 * uy)
+        draw.polygon([tip, (x1 + 3 * px, y1 + 3 * py),
+                      (x1 - 3 * px, y1 - 3 * py)], fill=WHITE)
+    # Radar dish: pale dome arc (upper half of an 80x80 ellipse),
+    # short vertical mast below it, small horizontal base line.
+    # Dish sits left-centre; its base ends at y=368, 8px above the caption.
+    draw.arc([730, 248, 810, 328], 180, 360, fill=PALE, width=4)
+    draw.line([(770, 288), (770, 360)], fill=PALE, width=4)
+    draw.line([(748, 360), (792, 360)], fill=PALE, width=4)
+    # 8-pointed orange starburst: two layered stars at about (926, 296).
+    draw.polygon(star_points(926, 296, 46, 20), fill=ORANGE)
+    draw.polygon(star_points(926, 296, 24, 10), fill=GOLD)
+    draw.text((716, 376), "STRAIT OF HORMUZ",
+              font=font(SANS_B, 17), fill=WHITE)
+    draw.text((716, 400), "US Patriot radar sites targeted",
+              font=font(SANS, 14), fill=PALE)
 
 
 def main():
-    page = build()
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    page.save(OUT_PATH, optimize=True)
-    data = OUT_PATH.read_bytes()
-    print(len(data), hashlib.sha256(data).hexdigest())
+    img = Image.new("RGB", (W, H), PAPER)
+    draw = ImageDraw.Draw(img)
+
+    # Masthead.
+    draw.text((30, 12), "THE WORLD TODAY", font=font(SERIF_B, 62), fill=INK)
+    draw.text((32, 90), "SUNDAY, 22 NOVEMBER 2026",
+              font=font(SANS_B, 19), fill=INK)
+    draw.text((32, 118), "Six stories that shaped the day, in one page.",
+              font=font(SANS, 16), fill=GREY)
+    draw.rectangle([30, 146, 994, 148], fill=RED)
+    draw.rectangle([30, 152, 994, 152], fill=INK)
+
+    # Hero: left text column (width 640), illustration box right.
+    draw.text((30, 168), "MIDDLE EAST ON EDGE",
+              font=font(SANS_B, 20), fill=RED)
+    draw_wrapped(draw, 30, 194, "IRAN STRIKES US DEFENCES AS GULF BRACES",
+                 font(SERIF_B, 40), 640, INK, spacing=2)
+    draw_wrapped(draw, 30, 322,
+                 "Revolutionary Guards fire missiles and drones at two "
+                 "US Patriot radar sites; Bahrain says an industrial "
+                 "facility was hit.",
+                 font(SANS, 19), 640, INK, spacing=3)
+    draw_wrapped(draw, 30, 384,
+                 "Tehran calls the US blockade a hostile act; the Strait "
+                 "of Hormuz could reopen in two days.",
+                 font(SANS, 18), 640, INK, spacing=3)
+    draw_hero_illustration(draw)
+    draw.rectangle([30, 448, 994, 449], fill=RED)
+
+    # Six-story grid: 3 columns x 2 rows.
+    col_x = [30, 358, 686]
+    row_y = [466, 624]
+    for i, (headline, deck) in enumerate(STORIES):
+        cx = col_x[i % 3]
+        ry = row_y[i // 3]
+        ICONS[i](draw, cx, ry + 2)
+        draw_wrapped(draw, cx, ry + 44, headline,
+                     font(SERIF_B, 21), 304, INK, spacing=2)
+        draw_wrapped(draw, cx, ry + 100, deck,
+                     font(SANS, 17), 304, INK, spacing=3)
+    draw.line([(346, 466), (346, 774)], fill=DIVIDER, width=1)
+    draw.line([(674, 466), (674, 774)], fill=DIVIDER, width=1)
+    draw.line([(30, 616), (994, 616)], fill=DIVIDER, width=1)
+
+    # Also today.
+    draw.rectangle([30, 790, 994, 791], fill=RED)
+    draw.text((30, 804), "ALSO TODAY", font=font(SANS_B, 17), fill=RED)
+    draw_wrapped(draw, 30, 830,
+                 "Mexico captures cartel boss El Chapo Isidro in Sinaloa "
+                 "\u2022 Magnitude 6.7 quake in Peru: 152 homes "
+                 "uninhabitable \u2022 Myanmar hit by a 4.1 quake",
+                 font(SANS, 17), 470, INK, spacing=3)
+    draw_wrapped(draw, 524, 830,
+                 "Democrats reclaim Congress in US midterm vote \u2022 EU "
+                 "and Indonesia sign trade deals \u2022 Al-Shabaab claims "
+                 "ambush on Somali troops",
+                 font(SANS, 17), 470, INK, spacing=3)
+
+    # Footer.
+    draw.line([(30, 964), (994, 964)], fill=DIVIDER, width=1)
+    draw.text((30, 976),
+              "Sources: Reuters, AP, ANI, BBC, Al Jazeera \u00b7 "
+              "22 November 2026",
+              font=font(SANS, 14), fill=GREY)
+
+    out = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       "assets", "entry.png")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    img.save(out, format="PNG")
+    data = open(out, "rb").read()
+    print(f"{out} {len(data)} bytes "
+          f"sha256={hashlib.sha256(data).hexdigest()}")
 
 
 if __name__ == "__main__":
